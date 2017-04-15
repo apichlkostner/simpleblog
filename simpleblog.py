@@ -92,10 +92,13 @@ class BlogHandler(Handler):
 
 class Welcome(Handler):
     def get_userid_from_safe(self, user_id_safe):
-        (user_id, sec) = user_id_safe.split('|')
-        key = config.get("security", "hash_key")
-        if hmac.new(key, user_id).hexdigest() == sec:
-            return user_id
+        if "|" in user_id_safe:
+            (user_id, sec) = user_id_safe.split('|')
+            key = config.get("security", "hash_key")
+            if hmac.new(key, user_id).hexdigest() == sec:
+                return user_id
+            else:
+                return None
         else:
             return None
         
@@ -111,6 +114,8 @@ class Welcome(Handler):
                 self.render("welcome.html", username = user.username)
             else:
                 self.redirect("/blog/signup")
+        else:
+            self.redirect("/blog/signup")
 
 class Signup(Handler):
     def render_signup(self, username="", password="", verify="", email="", error=""):
@@ -167,9 +172,59 @@ class Signup(Handler):
             error = "Some"
             self.render_signup(username, password, verify, email, error)
 
+class Login(Handler):
+    def calc_hash(self, username, password, salt):
+        h = hashlib.sha256(username + password + salt).hexdigest()        
+        return '%s|%s' % (h, salt)
+    
+    def make_secure_val(self, s):
+        key = config.get("security", "hash_key")
+        return "%s|%s" % (s, hmac.new(key, s).hexdigest())
+    
+    def get(self):
+        self.render("login.html")
+        
+    def post(self):
+        username = self.request.get("username")
+        password = self.request.get("password")
+        
+        if username and password:
+            users_with_name = list(db.GqlQuery("SELECT * from User where username='%s'" % username))
+            
+            if users_with_name.__len__() > 0:
+                u = users_with_name[0]
+                salt = u.pwd_hash.split("|")[1]
+                
+                pwd_hash_new = self.calc_hash(username, password, salt)
+                
+                if u.pwd_hash == pwd_hash_new:
+                    userid = str(u.key().id())
+                    secure_userid = self.make_secure_val(userid)
+                    self.response.headers.add_header('Set-Cookie', 'userid=%s; Path=/'
+                                                      % secure_userid)
+                    time.sleep(0.1)
+                    self.redirect("/blog/welcome")
+                else:
+                    error = "Wrong login data"
+                    self.render("login.html", username=username, password=password, error=error)
+            else:
+                error = "Username %s not available" % users_with_name[0]
+                self.render("login.html", username=username, password=password, error=error)
+        else:
+            error = "Please fill out the complete form"
+            self.render("login.html", username=username, password=password, error=error)
+
+class Logout(Handler):    
+    def get(self):
+        self.response.headers.add_header('Set-Cookie', 'userid=; Path=/')
+        time.sleep(0.1)
+        self.redirect("/blog/signup")
+
 application = webapp2.WSGIApplication([(r'/', MainPage),                                       
                                        (r'/blog', BlogPage),
                                        (r'/blog/signup', Signup),
+                                       (r'/blog/login', Login),
+                                       (r'/blog/logout', Logout),
                                        (r'/blog/welcome', Welcome),
                                        (r'/blog/newpost', NewPost),
                                        (r'/blog/(\d+)', BlogHandler)], debug=True)
